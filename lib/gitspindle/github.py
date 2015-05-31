@@ -392,6 +392,22 @@ class GitHub(GitSpindle):
             self.set_origin(opts)
 
     @command
+    def followers(self, opts):
+        """[<user>]
+           List all followers of a user"""
+        user = (opts['<user>'] or [self.gh.user().login])[0]
+        for f in self.gh.iter_followers(user):
+            print(str(f))
+
+    @command
+    def following(self, opts):
+        """[<user>]
+           List all followees of a user"""
+        user = (opts['<user>'] or [self.gh.user().login])[0]
+        for f in self.gh.iter_following(user):
+            print(str(f))
+
+    @command
     @wants_parent
     def forks(self, opts):
         """[<repo>]

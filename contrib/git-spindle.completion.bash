@@ -21,6 +21,11 @@
 # HELPERS #
 ###########
 
+# Logging
+function __gs_log {
+    echo -e $@ >> "${HOME}/git-spindle.log"
+}
+
 # I have yet to find out how to make bash completion not fallback to file
 # completion when returning an empty COMPREPLY.
 # As a workaround return a COMPREPLY with one element: the empty string and
@@ -49,7 +54,7 @@ __gs_find_on_cmdline () {
         word="${words[c]}"
         for subcommand in $1; do
             if [[ "$word" == "${subcommand}"* ]]; then
-                echo "$subcommand"
+                echo "$word"
                 return
             fi
         done
@@ -108,10 +113,8 @@ function __gs_comp_once {
 
 #######################################################################
 # TODO                                                                #
-# - global flags (--help, -h & --account)                             #
 # - Complete:                                                         #
 #   - pull-requests                                                   #
-#   - repo-files (from top dir, eg. `git hub ls`)                     #
 #   - issues                                                          #
 #   - hooks                                                           #
 #   - config key/values                                               #
@@ -156,7 +159,12 @@ _git_hub () {
                        whois                      "
     local subcommand="$(__git_find_on_cmdline "$subcommands")"
     if [ -z "$subcommand" ]; then
-        __gitcomp "$subcommands"
+        case "${cur}" in
+            --account=*) __gs_none                                        ;;
+            --*)         __gs_comp_once       "--account=" "" "${cur}" ""
+                         __gs_compappend_once "--help"                    ;;
+            *)           __gitcomp            "$subcommands"              ;;
+        esac
         return
     fi
 
@@ -204,6 +212,11 @@ _git_hub () {
 # GITHUB — HELPERS #
 ####################
 
+function __gs_gh_account {
+    local ddaccount=$(__gs_find_on_cmdline "--account=")
+    git hub $ddaccount config user 2>/dev/null || echo ""
+}
+
 function __gs_gh_comp_browse_section {
     local sections="issues       \
                     pulls        \
@@ -228,41 +241,30 @@ function __gs_gh_comp_issues_filter () {
                    since        \
                    sort         \
                    state        "
+    local diropts="asc desc"
+    local stateopts="all open closed"
+    local sortopts="created updated comments created"
 
     case "$cur" in
-        direction=*)
-            __gitcomp "asc desc" "" "${cur##direction=}"
-            return
-            ;;
-
-        state=*)
-            __gitcomp "all open closed" "" "${cur##state=}"
-            return
-            ;;
-
-        sort=*)
-            __gitcomp "created updated comments created"  "" "${cur##sort=}"
-            return
-            ;;
-
-        assignee=*|milestone=*|mentioned=*|labels=*|since=*|number=*)
-            __gs_none
-            return
-            ;;
-
-        *)
-            __gitcompappend "${filters}" "" "${cur}" "="
-            return
-            ;;
+        direction=*) __gitcomp "${diropts}"   "" "${cur##direction=}" ;;
+        state=*)     __gitcomp "${stateopts}" "" "${cur##state=}"     ;;
+        sort=*)      __gitcomp "${sortopts}"  "" "${cur##sort=}"      ;;
+        assignee=*|milestone=*|mentioned=*|labels=*|since=*|number=*) __gs_none ;;
+        *)           __gitcompappend "${filters}" "" "${cur}" "=" ;;
     esac
 }
 
+declare -A __gs_gh_users_cache
 function __gs_gh_compappend_users {
-    if [ -z "${__gs_gh_users_cache}" ]; then
-        __gs_gh_users_cache="$(git hub following)"
+    local account="$(__gs_gh_account)"
+
+    test -z "${account}" && return -1
+
+    if [ -z "${__gs_gh_users_cache[$account]}" ]; then
+        __gs_gh_users_cache[$account]="$(git hub following && echo $account)"
     fi
 
-    __gitcomp_nl_append "${__gs_gh_users_cache}" "${1-}" "${2-$cur}" "${3- }"
+    __gitcompappend "${__gs_gh_users_cache[$account]}" "${1-}" "${2-$cur}" "${3- }"
 }
 
 function __gs_gh_comp_users {
@@ -272,8 +274,10 @@ function __gs_gh_comp_users {
 
 declare -A __gs_gh_repos_cache
 function __gs_gh_compappend_repos {
-    #  TODO: Don't hardcode me here
-    local user="${1-moonlite}"
+    local user="${1-$(__gs_gh_account)}"
+
+    test -z "${user}" && return -1
+
     if [[ -z "${__gs_gh_repos_cache[$user]}" ]]; then
         __gs_gh_repos_cache[$user]="$(git hub repos --no-forks $user | sed -n -e 's/ .*//p' | grep -v '\/')"
     fi
@@ -286,13 +290,11 @@ function __gs_gh_comp_repo {
         */*)
             local user="${cur%%/*}"
             __gs_gh_compappend_repos $user "$user/" "${cur##*/}" " "
-            return
             ;;
 
         *)
             __gs_gh_compappend_users "" "${cur}" "/"
             __gs_gh_compappend_repos
-            return
             ;;
     esac
 }
@@ -304,17 +306,9 @@ function __gs_gh_comp_repo {
 # git hub add-account [--host=<host>] <alias>
 function _git_hub_add_account () {
     case "$cur" in
-        --host=*)
-            _known_hosts_real "${cur##--host=}"
-            return
-            ;;
-        --*)
-            __gs_comp_once "--host=" "" "${cur}" "" || __gs_none
-            return
-            ;;
-        *)
-            __gs_none
-            return
+        --host=*) _known_hosts_real "${cur##--host=}"                  ;;
+        --*)      __gs_comp_once "--host=" "" "${cur}" "" || __gs_none ;;
+        *)        __gs_none                                            ;;
     esac
 }
 
@@ -326,17 +320,18 @@ function _git_hub_add_hook () {
 
 # git hub add-public-keys [<key>...]
 function _git_hub_add_public_keys () {
+    _filedir '@(pub)'
     return
 }
 
 # git hub add-remote [--ssh|--http|--git] <user>...
 function _git_hub_add_remote () {
     if [ "${cur}" == --* ]; then
-        __gs_comp_once "--ssh --http --git"
+        __gs_comp_once "--ssh --http --git"  || __gs_none
         return
     fi
 
-    __gs_gh_comp_users
+    __gs_gh_comp_users || __gs_none
 }
 
 # git hub apply-pr <pr-number>
@@ -353,21 +348,19 @@ function _git_hub_browse () {
     fi
 
     case "$cur" in
-        --*)
-            __gs_comp_once "--parent"
-            return
-            ;;
-
-        *)
-            __gs_gh_comp_repo
-            return
-            ;;
+        --*) __gs_comp_once "--parent" || __gs_none;;
+        *)   __gs_gh_comp_repo ;;
     esac
 }
 
 # git hub calendar [<user>]
 function _git_hub_calendar () {
-    __gs_gh_comp_users
+    if [[ "${prev}" != calendar ]]; then
+        __gs_none
+        return
+    fi
+
+    __gs_gh_comp_users || __gs_none
 }
 
 # git hub cat <file>...
@@ -380,51 +373,35 @@ function _git_hub_cat () {
 #               [--parent]
 #               [git-clone-options] <repo> [<dir>]
 function _git_hub_clone () {
-    [[ "${prev}" != ?(--*|clone) ]] && return
+    if [[ "${prev}" != ?(--*|clone) ]]; then
+        _filedir -d
+        return
+    fi
 
     case "$cur" in
-        --*)
-            _git_clone
-            __gs_compappend_once "--ssh --http --git"
-            __gs_compappend_once "--parent"
-            return
-            ;;
-        *)
-            __gs_gh_comp_repo
-            return
-            ;;
+        --*) _git_clone
+             __gs_compappend_once "--ssh --http --git"
+             __gs_compappend_once "--parent"           ;;
+        *) __gs_gh_comp_repo                           ;;
     esac
 }
 
 # git hub config [--unset] <key> [<value>]
 function _git_hub_config () {
+    # TODO: #2 Complete config key/values
     case "$cur" in
-        --*)
-            __gs_comp_once "--unset"
-            return
-            ;;
-        *)
-            # TODO: #2 Complete config key/values
-            __gs_none
-            return
+        --*) __gs_comp_once "--unset" || __gs_none ;;
+        *)  __gs_none                              ;;
     esac
 }
 
 # git hub create [--private] [-d <description>]
 function _git_hub_create () {
     case "$cur" in
-        -*)
-            __gs_compappend_once "-d"
-            __gs_compappend_once "--private"
-            return
-            ;;
-        --*)
-            __gs_compappend_once "--private"
-            return
-            ;;
-        *)
-            __gs_none
-            return
+        --*) __gs_compappend_once "--private" ;;
+        -*)  __gs_compappend_once "-d"
+             __gs_compappend_once "--private" ;;
+        *)   __gs_none                        ;;
     esac
 }
 
@@ -442,15 +419,8 @@ function _git_hub_fork () {
     fi
 
     case "$cur" in
-        --*)
-            __gs_comp_once "--ssh --http --git"
-            return
-            ;;
-
-        *)
-            __gs_gh_comp_repo
-            return
-            ;;
+        --*) __gs_comp_once "--ssh --http --git" || __gs_none ;;
+        *)   __gs_gh_comp_repo                                ;;
     esac
 }
 
@@ -466,9 +436,10 @@ function _git_hub_forks () {
 
 # git hub gist [-d <description>] <file>...
 function _git_hub_gist () {
-    if [[ "$cur" == -* ]] && [[ "${prev}" == "gist" ]]; then
-        __gs_comp_once "-d"
-    fi
+    case "${prev}" in
+        gist) [[ "$cur" == -* ]] && __gs_comp_once "-d" ;;
+        -d)   __gs_none                                 ;;
+    esac
 }
 
 # git hub gists [<user>]
@@ -500,15 +471,8 @@ function _git_hub_issue () {
     fi
 
     case "$cur" in
-        --*)
-            __gs_comp_once "--parent"
-            return
-            ;;
-        *)
-            __gs_gh_comp_repo
-            return
-            ;;
-
+        --*) __gs_comp_once "--parent" ;;
+        *)   __gs_gh_comp_repo         ;;
     esac
 }
 
@@ -520,15 +484,8 @@ function _git_hub_issues () {
     fi
 
     case "$cur" in
-        --*)
-            __gs_comp_once "--parent"
-            return
-            ;;
-
-        *)
-            __gs_gh_comp_repo
-            return
-            ;;
+        --*) __gs_comp_once "--parent" || __gs_none ;;
+        *)   __gs_gh_comp_repo         || __gs_none ;;
     esac
 }
 
@@ -557,22 +514,15 @@ function _git_hub_log () {
                      Watch                        \
                      GistHistory                  "
     case "$cur" in
-        --type=*)
-            __gitcomp "${log_types}" "" "${cur##--type=}"
-            return
-            ;;
-        --*)
-            __gs_comp_once "--type=" "" "${cur}" ""
-            return
-            ;;
-        *)
-            __gs_none
-            return
+        --type=*) __gitcomp "${log_types}" "" "${cur##--type=}"              ;;
+        --*)      __gs_comp_once "--type=" "" "${cur}" ""       || __gs_none ;;
+        *)        __gs_none                                                  ;;
     esac
 }
 
 # git hub ls <dir>...
 function _git_hub_ls () {
+    # FIXME: Only complete dirs in index
     __git_complete_index_file ""
 }
 
@@ -584,16 +534,9 @@ function _git_hub_mirror () {
     fi
 
     case "$cur" in
-        --*)
-            __gs_compappend_once "--ssh --http --git"
-            __gs_compappend_once "--goblet"
-            return
-            ;;
-
-        *)
-            __gs_gh_comp_repo
-            return
-            ;;
+        --*) __gs_compappend_once "--ssh --http --git"
+             __gs_compappend_once "--goblet"           ;;
+        *)  __gs_gh_comp_repo                          ;;
     esac
 }
 
@@ -604,6 +547,11 @@ function _git_hub_network () {
 
 # git hub public-keys [<user>]
 function _git_hub_public_keys () {
+    if [[ "${prev}" != public-keys ]]; then
+        __gs_none
+        return
+    fi
+
     __gs_gh_comp_users || __gs_none
 }
 
@@ -615,23 +563,11 @@ function _git_hub_pull_request () {
     fi
 
     case "$cur" in
-        --issue=*)
-            # TODO: #4 Complete issue number
-            __gs_none
-            return
-            ;;
-        --*)
-            __gs_comp_once "--issue=" "" "${cur}" ""
-            return
-            ;;
-        *:*)
-            __gitcomp_nl "$(__git_refs)" "" "${cur##*:}" " "
-            return
-            ;;
-        *)
-            __gitcomp_nl "$(__git_refs)" "" "${cur}" ""
-            return
-            ;;
+        # TODO: #4 Complete issue number
+        --issue=*) __gs_none                                             ;;
+        --*)       __gs_comp_once "--issue=" "" "${cur}" "" || __gs_none ;;
+        *:*)       __gitcomp_nl "$(__git_refs)" "" "${cur##*:}" " "      ;;
+        *)         __gitcomp_nl "$(__git_refs)" "" "${cur}"     ""       ;;
     esac
 }
 
@@ -644,28 +580,23 @@ function _git_hub_remove_hook () {
 # git hub render [--save=<outfile>] <file>
 function _git_hub_render () {
     case "$cur" in
-        --save=*)
-            __gs_filedir '@(htm|html)' "${cur##--save=}"
-            return
-            ;;
-        --*)
-            __gs_comp_once "--save=" "" "${cur}" ""
-            return
-            ;;
-        *)
-            _filedir '@(md|markdown)'
-            return
+        --save=*) __gs_filedir '@(htm|html)' "${cur##--save=}" ;;
+        --*)      __gs_comp_once "--save=" "" "${cur}" ""      ;;
+        *)        _filedir '@(md|markdown)'                    ;;
     esac
 }
 
 # git hub repos [--no-forks] [<user>]
 function _git_hub_repos () {
-    if [[ "$cur" == --* ]]  && [[ "${prev}" == "repos" ]]; then
-        __gs_comp_once "--no-forks"
+    if [[ "${prev}" != ?(--no-forks|repos) ]]; then
+        __gs_none
         return
     fi
 
-    __gs_gh_comp_users || __gs_none
+    case "${cur}" in
+        --*) __gs_comp_once "--no-forks" || __gs_none ;;
+        *)   __gs_gh_comp_users          || __gs_none ;;
+    esac
 }
 
 # git hub say [<msg>]
@@ -680,7 +611,7 @@ function _git_hub_set_origin () {
         return
     fi
 
-    __gs_comp_once "--ssh --http --git"
+    __gs_comp_once "--ssh --http --git" || __gs_none
 }
 
 # git hub setup-goblet
@@ -700,5 +631,5 @@ function _git_hub_whoami () {
 
 # git hub whois <user>...
 function _git_hub_whois () {
-    __gs_gh_comp_users
+    __gs_gh_comp_users || __gs_none
 }

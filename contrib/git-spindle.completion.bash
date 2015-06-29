@@ -261,7 +261,7 @@ function __gs_gh_compappend_users {
     test -z "${account}" && return -1
 
     if [ -z "${__gs_gh_users_cache[$account]}" ]; then
-        __gs_gh_users_cache[$account]="$(git hub following && echo $account)"
+        __gs_gh_users_cache[$account]="$(git hub following 2>/dev/null && echo $account)"
     fi
 
     __gitcompappend "${__gs_gh_users_cache[$account]}" "${1-}" "${2-$cur}" "${3- }"
@@ -279,7 +279,7 @@ function __gs_gh_compappend_repos {
     test -z "${user}" && return -1
 
     if [[ -z "${__gs_gh_repos_cache[$user]}" ]]; then
-        __gs_gh_repos_cache[$user]="$(git hub repos --no-forks $user | sed -n -e 's/ .*//p' | grep -v '\/')"
+        __gs_gh_repos_cache[$user]="$(git hub repos --no-forks $user 2>/dev/null | sed -n -e 's/ .*//p' | grep -v '\/')"
     fi
 
     __gitcomp_nl_append "${__gs_gh_repos_cache[$user]}" "${2-}" "${3-$cur}" "${4- }"
@@ -456,7 +456,7 @@ function _git_hub_hooks () {
 # git hub ignore [<language>...]
 function _git_hub_ignore () {
     if [ -z "${__git_hub_ignore_cache}" ]; then
-        __git_hub_ignore_cache="$(git hub ignore | sed -n -e 's/  \* //p')"
+        __git_hub_ignore_cache="$(git hub ignore 2>/dev/null | sed -n -e 's/  \* //p')"
     fi
 
     __gitcomp_nl "${__git_hub_ignore_cache}"

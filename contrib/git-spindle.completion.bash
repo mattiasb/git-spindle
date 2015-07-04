@@ -117,8 +117,8 @@ function __gs_comp_once {
 #   - pull-requests                                                   #
 #   - issues                                                          #
 #   - hooks                                                           #
-#   - config key/values                                               #
 # - longopt completion shouldn't remove flag when completing value    #
+# - make completion load correctly without custom bashrc-code         #
 #######################################################################
 
 _git_hub () {
@@ -388,10 +388,29 @@ function _git_hub_clone () {
 
 # git hub config [--unset] <key> [<value>]
 function _git_hub_config () {
-    # TODO: #2 Complete config key/values
-    case "$cur" in
-        --*) __gs_comp_once "--unset" || __gs_none ;;
-        *)  __gs_none                              ;;
+    if [[ "${prev}" == config ]] && [[ "${cur}" == --* ]]; then
+        __gs_comp_once "--unset" || __gs_none
+        return
+    fi
+
+    local keys="auth_id \
+                host    \
+                token   \
+                user    "
+    case "${prev}" in
+        config|--unset)
+            __gs_comp_once "${keys}"
+            ;;
+        host)
+            if [[ -z "$(__gs_find_on_cmdline "--unset")" ]]; then
+                _known_hosts_real "${cur}"
+            else
+                __gs_none
+            fi
+            ;;
+        *)
+            __gs_none
+            ;;
     esac
 }
 
